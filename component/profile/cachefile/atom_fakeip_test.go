@@ -34,10 +34,14 @@ func TestAtomFakeIPMappingAndBindingLifecycle(t *testing.T) {
 	_, err = store.Assign("first.invalid", first, last, &group)
 	require.NoError(t, err)
 
-	for _, name := range []string{"second.invalid", "third.invalid", "recycled.invalid"} {
-		_, err := store.Assign(name, first, last, nil)
+	var assigned []netip.Addr
+	for _, name := range []string{"second.invalid", "third.invalid", "last.invalid", "recycled.invalid"} {
+		got, err := store.Assign(name, first, last, nil)
 		require.NoError(t, err)
+		assigned = append(assigned, got)
 	}
+	// the whole range is used, last address included, before the cursor wraps
+	require.Equal(t, []netip.Addr{first.Next(), first.Next().Next(), last, first}, assigned)
 	assertBinding(ip, "recycled.invalid", "")
 	_, stale, err := store.LookupBinding(netip.Addr{}, "first.invalid")
 	require.NoError(t, err)
@@ -51,4 +55,20 @@ func TestAtomFakeIPMappingAndBindingLifecycle(t *testing.T) {
 	require.Error(t, err)
 	require.NoError(t, store.Flush())
 	assertBinding(ip, "", "")
+}
+
+func TestAtomFakeIPClearRetired(t *testing.T) {
+	C.SetHomeDir(t.TempDir())
+	store := AtomFakeIP{Prefix: netip.MustParsePrefix("198.18.0.0/29")}
+	first := netip.MustParseAddr("198.18.0.4")
+	last := netip.MustParseAddr("198.18.0.7")
+	group := "g-00000001"
+	_, err := store.Assign("a.invalid", first, last, &group)
+	require.NoError(t, err)
+	require.NoError(t, store.MoveBindings(group, "final"))
+	_, err = store.Assign("b.invalid", first, last, &group)
+	require.Error(t, err)
+	require.NoError(t, store.ClearRetired([]string{group}))
+	_, err = store.Assign("b.invalid", first, last, &group)
+	require.NoError(t, err)
 }

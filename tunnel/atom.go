@@ -10,6 +10,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/fakeip"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/log"
 	D "github.com/miekg/dns"
 )
 
@@ -25,6 +26,9 @@ func ConfigureAtom(pool *fakeip.Pool, final, dns string) {
 	if pool == nil {
 		atomRuntime.Store(nil)
 		return
+	}
+	if err := pool.ClearAtomRetired(); err != nil {
+		log.Warnln("Atom FakeIP: clear retired outbounds: %v", err)
 	}
 	atomRuntime.Store(&atomConfig{pool: pool, final: final, dns: dns})
 }

@@ -61,7 +61,7 @@ func (a AtomFakeIP) Assign(host string, first, last netip.Addr, binding *string)
 			cursor := []byte("cursor")
 			offset, ok := netip.AddrFromSlice(bucket.Get(cursor))
 			ip = first
-			if ok && offset.Next().Less(last) {
+			if ok && !last.Less(offset.Next()) {
 				ip = offset.Next()
 			}
 			addressKey := []byte("i:" + ip.String())
@@ -127,6 +127,18 @@ func (a AtomFakeIP) MoveBindings(group, final string) error {
 			}
 		}
 		return bucket.Put([]byte("retired:"+group), []byte{1})
+	})
+}
+
+// ClearRetired drops the retired marks of groups that exist in the applied configuration again.
+func (a AtomFakeIP) ClearRetired(groups []string) error {
+	return a.transaction(true, func(bucket *bbolt.Bucket) error {
+		for _, group := range groups {
+			if err := bucket.Delete([]byte("retired:" + group)); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

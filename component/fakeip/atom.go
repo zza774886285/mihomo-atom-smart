@@ -18,6 +18,15 @@ func (p *Pool) SetAtomOutbounds(outbounds map[string]bool) {
 	p.atomOutbounds = outbounds
 }
 
+// ClearAtomRetired lets groups that are configured again accept bindings after an earlier removal.
+func (p *Pool) ClearAtomRetired() error {
+	groups := make([]string, 0, len(p.atomOutbounds))
+	for name := range p.atomOutbounds {
+		groups = append(groups, name)
+	}
+	return p.atom.ClearRetired(groups)
+}
+
 func (p *Pool) IsAtom() bool { return p != nil && p.atom != nil }
 
 func (p *Pool) LookupDNS(host string, binding *string) (netip.Addr, error) {
