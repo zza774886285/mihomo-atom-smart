@@ -13,11 +13,16 @@ import (
 )
 
 type packet struct {
-	pc        net.PacketConn
-	lAddr     netip.AddrPort
-	buf       []byte
-	tunnel    C.Tunnel
-	additions []inbound.Addition
+	pc         net.PacketConn
+	lAddr      netip.AddrPort
+	buf        []byte
+	tunnel     C.Tunnel
+	additions  []inbound.Addition
+	sessionKey string
+}
+
+func (c *packet) SetSessionKey(key string) {
+	c.sessionKey = key
 }
 
 func (c *packet) Data() []byte {
@@ -27,7 +32,7 @@ func (c *packet) Data() []byte {
 // WriteBack opens a new socket binding `addr` to write UDP packet back
 func (c *packet) WriteBack(b []byte, addr net.Addr) (n int, err error) {
 	rAddr := addr.(*net.UDPAddr).AddrPort() // tunnel's handleUDPToLocal will ensure addr is *net.UDPAddr
-	tc, err := createOrGetLocalConn(rAddr, c.lAddr, c.tunnel, c.additions...)
+	tc, err := createOrGetLocalConn(rAddr, c.lAddr, c.sessionKey, c.tunnel, c.additions...)
 	if err != nil {
 		return
 	}
@@ -52,9 +57,12 @@ func (c *packet) InAddr() net.Addr {
 // this function listen at rAddr and write to lAddr
 // for here, rAddr is the ip/port client want to access
 // lAddr is the ip/port client opened
-func createOrGetLocalConn(rAddr, lAddr netip.AddrPort, tunnel C.Tunnel, additions ...inbound.Addition) (*net.UDPConn, error) {
+func createOrGetLocalConn(rAddr, lAddr netip.AddrPort, sessionKey string, tunnel C.Tunnel, additions ...inbound.Addition) (*net.UDPConn, error) {
 	remote := rAddr.String()
-	local := lAddr.String()
+	local := sessionKey
+	if local == "" {
+		local = lAddr.String()
+	}
 	natTable := tunnel.NatTable()
 	localConn := natTable.GetForLocalConn(local, remote)
 	// localConn not exist

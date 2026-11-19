@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"net"
+	"sync"
 
 	"github.com/metacubex/mihomo/common/sockopt"
 	"github.com/metacubex/mihomo/component/resolver"
@@ -13,16 +14,18 @@ import (
 )
 
 var (
-	address string
-	server  = &Server{}
+	address   string
+	serverMux sync.Mutex
+	server    = &Server{}
 
 	dnsDefaultTTL uint32 = 600
 )
 
 type Server struct {
-	service   resolver.Service
-	tcpServer *D.Server
-	udpServer *D.Server
+	serviceMux sync.RWMutex
+	service    resolver.Service
+	tcpServer  *D.Server
+	udpServer  *D.Server
 }
 
 type serverHandler struct {
@@ -32,7 +35,10 @@ type serverHandler struct {
 
 // ServeDNS implement D.Handler ServeDNS
 func (s serverHandler) ServeDNS(w D.ResponseWriter, r *D.Msg) {
-	msg, err := s.service.ServeMsg(context.Background(), r)
+	s.serviceMux.RLock()
+	service := s.service
+	s.serviceMux.RUnlock()
+	msg, err := service.ServeMsg(context.Background(), r)
 	if err != nil {
 		m := new(D.Msg)
 		m.SetRcode(r, D.RcodeServerFailure)
@@ -58,11 +64,21 @@ func (s *Server) TCPHandler() D.Handler {
 }
 
 func (s *Server) SetService(service resolver.Service) {
+	s.serviceMux.Lock()
+	defer s.serviceMux.Unlock()
 	s.service = service
 }
 
+func Ready() bool {
+	serverMux.Lock()
+	defer serverMux.Unlock()
+	return server.tcpServer != nil && server.udpServer != nil
+}
+
 func ReCreateServer(addr string, lc C.InboundListenConfig, service resolver.Service) {
-	if addr == address && service != nil {
+	serverMux.Lock()
+	defer serverMux.Unlock()
+	if addr == address && service != nil && server.tcpServer != nil && server.udpServer != nil {
 		server.SetService(service)
 		return
 	}
@@ -77,7 +93,6 @@ func ReCreateServer(addr string, lc C.InboundListenConfig, service resolver.Serv
 		server.udpServer = nil
 	}
 
-	server.service = nil
 	address = ""
 
 	if addr == "" || lc == nil || service == nil {
@@ -99,32 +114,43 @@ func ReCreateServer(addr string, lc C.InboundListenConfig, service resolver.Serv
 	address = addr
 	server = &Server{service: service}
 
-	go func() {
-		p, err := lc.ListenPacket(context.Background(), "udp", addr)
-		if err != nil {
-			log.Errorln("Start DNS server(UDP) error: %s", err.Error())
-			return
+	p, err := lc.ListenPacket(context.Background(), "udp", addr)
+	if err != nil {
+		return
+	}
+	if reuseErr := sockopt.UDPReuseaddr(p); reuseErr != nil {
+		log.Warnln("Failed to set DNS UDP address reuse: %s", reuseErr)
+	}
+
+	l, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		_ = p.Close()
+		return
+	}
+	log.Infoln("DNS server listening on TCP and UDP at: %s", addr)
+
+	udpServer := &D.Server{Addr: addr, PacketConn: p, Handler: server.UDPHandler()}
+	tcpServer := &D.Server{Addr: addr, Listener: l, Handler: server.TCPHandler()}
+	server.udpServer = udpServer
+	server.tcpServer = tcpServer
+	for _, listener := range []*D.Server{udpServer, tcpServer} {
+		started := make(chan struct{})
+		listener.NotifyStartedFunc = func() { close(started) }
+		done := make(chan struct{})
+		go func(listener *D.Server) {
+			defer close(done)
+			_ = listener.ActivateAndServe()
+		}(listener)
+		select {
+		case <-started:
+		case <-done:
+			if listener == udpServer {
+				_ = p.Close()
+				server.udpServer = nil
+			} else {
+				_ = l.Close()
+				server.tcpServer = nil
+			}
 		}
-
-		if err := sockopt.UDPReuseaddr(p); err != nil {
-			log.Warnln("Failed to Reuse UDP Address: %s", err)
-		}
-
-		log.Infoln("DNS server(UDP) listening at: %s", p.LocalAddr().String())
-		server.udpServer = &D.Server{Addr: addr, PacketConn: p, Handler: server.UDPHandler()}
-		_ = server.udpServer.ActivateAndServe()
-	}()
-
-	go func() {
-		l, err := lc.Listen(context.Background(), "tcp", addr)
-		if err != nil {
-			log.Errorln("Start DNS server(TCP) error: %s", err.Error())
-			return
-		}
-
-		log.Infoln("DNS server(TCP) listening at: %s", l.Addr().String())
-		server.tcpServer = &D.Server{Addr: addr, Listener: l, Handler: server.TCPHandler()}
-		_ = server.tcpServer.ActivateAndServe()
-	}()
-
+	}
 }

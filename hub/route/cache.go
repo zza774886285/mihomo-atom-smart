@@ -3,6 +3,7 @@ package route
 import (
 	"github.com/metacubex/mihomo/component/profile/cachefile"
 	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/metacubex/mihomo/tunnel"
 
 	"github.com/metacubex/chi"
 	"github.com/metacubex/chi/render"
@@ -14,6 +15,14 @@ func cacheRouter() http.Handler {
 	r.Post("/fakeip/flush", flushFakeIPPool)
 	r.Post("/smart/flush", flushAllSmartCache)
 	r.Post("/smart/flush/{config}", flushSmartConfigCache)
+	r.Post("/fakeip/group/{group}/final", func(w http.ResponseWriter, r *http.Request) {
+		if err := tunnel.MoveAtomBindings(chi.URLParam(r, "group")); err != nil {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+		render.NoContent(w)
+	})
 	r.Post("/dns/flush", flushDnsCache)
 	return r
 }

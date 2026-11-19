@@ -102,8 +102,16 @@ func initUDP() {
 func (t tunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
 	udpInit.Do(initUDP)
 
-	packetAdapter := C.NewPacketAdapter(packet, metadata)
-	key := packetAdapter.Key()
+	key := packet.LocalAddr().String()
+	if atomRuntime.Load() != nil && (metadata.Type == C.TPROXY || metadata.InName == "DEFAULT-MIXED") {
+		fixMetadata(metadata)
+		// A single client UDP socket can send to destinations routed to different groups.
+		key += "|" + metadata.RemoteAddress()
+		if transparent, ok := packet.(interface{ SetSessionKey(string) }); ok {
+			transparent.SetSessionKey(key)
+		}
+	}
+	packetAdapter := C.NewPacketAdapterWithKey(packet, metadata, key)
 
 	hash := utils.MapHash(key)
 	queueNo := uint(hash) % uint(len(udpQueues))
@@ -297,6 +305,9 @@ func needLookupIP(metadata *C.Metadata) bool {
 }
 
 func preHandleMetadata(metadata *C.Metadata) error {
+	if atom := atomRuntime.Load(); atom != nil && metadata.Host == "" && atom.pool.IPNet().Contains(metadata.DstIP) {
+		return atom.applyFakeIP(metadata, metadata.DstIP, "")
+	}
 	// preprocess enhanced-mode metadata
 	if needLookupIP(metadata) {
 		host, exist := resolver.FindHostByIP(metadata.DstIP)
@@ -325,6 +336,13 @@ func preHandleMetadata(metadata *C.Metadata) error {
 }
 
 func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
+	mixedReal := false
+	if atom := atomRuntime.Load(); atom != nil {
+		mixedReal, err = atom.resolveMixed(metadata)
+		if err != nil {
+			return
+		}
+	}
 	if metadata.SpecialProxy != "" {
 		var exist bool
 		proxy, exist = proxies[metadata.SpecialProxy]
@@ -338,7 +356,7 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		attemptProcessLookup = metadata.Type != C.INNER
 	)
 
-	if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
+	if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok && !mixedReal {
 		metadata.DstIP, _ = node.RandIP()
 		resolved = true
 	}
@@ -465,7 +483,9 @@ func handleUDPConn(packet C.PacketAdapter) {
 				return nil, nil, err
 			}
 
-			_ = preHandleMetadata(metadata) // error was pre-checked
+			if err := preHandleMetadata(metadata); err != nil {
+				return nil, nil, err
+			}
 
 			proxy, rule, err := resolveMetadata(metadata)
 			if err != nil {
@@ -495,7 +515,11 @@ func handleUDPConn(packet C.PacketAdapter) {
 			oAddrPort := dialMetadata.AddrPort()
 			writeBackProxy := nat.NewWriteBackProxy(packet)
 
-			go handleUDPToLocal(writeBackProxy, pc, sender, key, oAddrPort)
+			var atomSource netip.AddrPort
+			if atomRuntime.Load() != nil && originMetadata.Type == C.TPROXY {
+				atomSource = originMetadata.AddrPort()
+			}
+			go handleUDPToLocal(writeBackProxy, pc, sender, key, oAddrPort, atomSource)
 			return pc, writeBackProxy, nil
 		}
 
@@ -571,7 +595,10 @@ func handleTCPConn(connCtx C.ConnContext) {
 	}
 
 	dialMetadata := metadata
-	if len(metadata.Host) > 0 {
+	atom := atomRuntime.Load()
+	if atom != nil && metadata.DNSMode == C.DNSHosts {
+		dialMetadata = metadata.Pure()
+	} else if len(metadata.Host) > 0 && (atom == nil || metadata.DNSMode != C.DNSFakeIP) {
 		if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
 			if dstIp, _ := node.RandIP(); !resolver.IsFakeIP(dstIp) {
 				dialMetadata.DstIP = dstIp

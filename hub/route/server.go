@@ -18,8 +18,11 @@ import (
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/dns"
+	"github.com/metacubex/mihomo/listener"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/ntp"
+	"github.com/metacubex/mihomo/tunnel"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 
 	"github.com/metacubex/chi"
@@ -126,6 +129,13 @@ func router(isDebug bool, secret string, dohServer string, cors Cors) *chi.Mux {
 		r.Get("/memory", memory)
 		r.Get("/version", version)
 		r.Mount("/configs", configRouter())
+		r.Get("/atom/ready", func(w http.ResponseWriter, r *http.Request) {
+			if !dns.Ready() || !listener.AtomUDPReady() || !tunnel.AtomReady() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
 		r.Mount("/proxies", proxyRouter())
 		r.Mount("/group", groupRouter())
 		r.Mount("/rules", ruleRouter())

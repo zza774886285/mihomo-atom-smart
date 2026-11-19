@@ -29,14 +29,16 @@ type store interface {
 
 // Pool is an implementation about fake ip generator without storage
 type Pool struct {
-	gateway netip.Addr
-	first   netip.Addr
-	last    netip.Addr
-	offset  netip.Addr
-	cycle   bool
-	mux     sync.Mutex
-	ipnet   netip.Prefix
-	store   store
+	gateway       netip.Addr
+	first         netip.Addr
+	last          netip.Addr
+	offset        netip.Addr
+	cycle         bool
+	mux           sync.Mutex
+	ipnet         netip.Prefix
+	store         store
+	atom          *cachefile.AtomFakeIP
+	atomOutbounds map[string]bool
 }
 
 // Lookup return a fake ip with host
@@ -57,6 +59,10 @@ func (p *Pool) Lookup(host string) netip.Addr {
 
 // LookBack return host with the fake ip
 func (p *Pool) LookBack(ip netip.Addr) (string, bool) {
+	if p.atom != nil {
+		host, _, err := p.atom.LookupBinding(ip, "")
+		return host, err == nil && host != ""
+	}
 	p.mux.Lock()
 	defer p.mux.Unlock()
 
@@ -65,6 +71,10 @@ func (p *Pool) LookBack(ip netip.Addr) (string, bool) {
 
 // Exist returns if given ip exists in fake-ip pool
 func (p *Pool) Exist(ip netip.Addr) bool {
+	if p.atom != nil {
+		_, exists := p.LookBack(ip)
+		return exists
+	}
 	p.mux.Lock()
 	defer p.mux.Unlock()
 
@@ -88,6 +98,9 @@ func (p *Pool) IPNet() netip.Prefix {
 
 // CloneFrom clone cache from old pool
 func (p *Pool) CloneFrom(o *Pool) {
+	if p.atom != nil || o.atom != nil {
+		return
+	}
 	p.mux.Lock()
 	defer p.mux.Unlock()
 
@@ -119,6 +132,11 @@ func (p *Pool) get(host string) netip.Addr {
 }
 
 func (p *Pool) FlushFakeIP() error {
+	if p.atom != nil {
+		return p.atom.Flush()
+	}
+	p.mux.Lock()
+	defer p.mux.Unlock()
 	err := p.store.FlushFakeIP()
 	if err == nil {
 		p.cycle = false
@@ -156,6 +174,7 @@ func (p *Pool) restoreState() {
 
 type Options struct {
 	IPNet netip.Prefix
+	Atom  bool
 
 	// Size sets the maximum number of entries in memory
 	// and does not work if Persistence is true
@@ -186,6 +205,10 @@ func New(options Options) (*Pool, error) {
 		offset:  first.Prev(),
 		cycle:   false,
 		ipnet:   options.IPNet,
+	}
+	if options.Atom {
+		pool.atom = &cachefile.AtomFakeIP{Prefix: options.IPNet}
+		return pool, nil
 	}
 	if options.Persistence {
 		pool.store = newCachefileStore(cachefile.Cache(), options.IPNet)

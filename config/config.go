@@ -173,6 +173,8 @@ type DNS struct {
 	FakeIPPool6           *fakeip.Pool
 	FakeIPSkipper         *fakeip.Skipper
 	FakeIPTTL             int
+	AtomFakeIPFinal       string
+	AtomMixedDNS          string
 	NameServerPolicy      []dns.Policy
 	ProxyServerNameserver []dns.NameServer
 	ProxyServerPolicy     []dns.Policy
@@ -225,6 +227,8 @@ type RawCors struct {
 }
 
 type RawDNS struct {
+	AtomFakeIPFinal              string                              `yaml:"atom-fake-ip-final" json:"atom-fake-ip-final"`
+	AtomMixedDNS                 string                              `yaml:"atom-mixed-dns" json:"atom-mixed-dns"`
 	Enable                       bool                                `yaml:"enable" json:"enable"`
 	PreferH3                     bool                                `yaml:"prefer-h3" json:"prefer-h3"`
 	IPv6                         bool                                `yaml:"ipv6" json:"ipv6"`
@@ -733,6 +737,16 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	dnsCfg, err := parseDNS(rawCfg, ruleProviders)
 	if err != nil {
 		return nil, err
+	}
+	if dnsCfg.AtomFakeIPFinal != "" {
+		if _, ok := proxies[dnsCfg.AtomFakeIPFinal]; !ok {
+			return nil, errors.New("dns.atom-fake-ip-final proxy group is missing")
+		}
+		outbounds := make(map[string]bool, len(proxies))
+		for name := range proxies {
+			outbounds[name] = true
+		}
+		dnsCfg.FakeIPPool.SetAtomOutbounds(outbounds)
 	}
 	config.DNS = dnsCfg
 
@@ -1557,10 +1571,21 @@ func parseDNS(rawCfg *RawConfig, ruleProviders map[string]P.RuleProvider) (*DNS,
 
 		dnsCfg.FakeIPSkipper = skipper
 		dnsCfg.FakeIPTTL = cfg.FakeIPTTL
+		dnsCfg.AtomFakeIPFinal = cfg.AtomFakeIPFinal
+		dnsCfg.AtomMixedDNS = cfg.AtomMixedDNS
+		if cfg.AtomFakeIPFinal != "" {
+			if !cfg.Enable || !dnsCfg.FakeIPRange.IsValid() || dnsCfg.FakeIPRange6.IsValid() || !rawCfg.Profile.StoreFakeIP {
+				return nil, errors.New("Atom FakeIP requires enabled DNS, an IPv4-only FakeIP pool, and store-fake-ip")
+			}
+			if _, err := netip.ParseAddrPort(cfg.AtomMixedDNS); err != nil {
+				return nil, fmt.Errorf("invalid dns.atom-mixed-dns: %w", err)
+			}
+		}
 
 		if dnsCfg.FakeIPRange.IsValid() {
 			pool, err := fakeip.New(fakeip.Options{
 				IPNet:       dnsCfg.FakeIPRange,
+				Atom:        cfg.AtomFakeIPFinal != "",
 				Size:        1000,
 				Persistence: rawCfg.Profile.StoreFakeIP,
 			})

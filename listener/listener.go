@@ -408,7 +408,7 @@ func ReCreateTProxy(port int, tunnel C.Tunnel) {
 	addr := genAddr(bindAddress, port, allowLan)
 
 	if tproxyListener != nil {
-		if tproxyListener.RawAddress() == addr {
+		if tproxyListener.RawAddress() == addr && tproxyUDPListener != nil {
 			return
 		}
 		tproxyListener.Close()
@@ -654,6 +654,14 @@ func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C
 }
 
 // GetPorts return the ports of proxy servers
+func AtomUDPReady() bool {
+	tproxyMux.Lock()
+	defer tproxyMux.Unlock()
+	mixedMux.Lock()
+	defer mixedMux.Unlock()
+	return tproxyUDPListener != nil && mixedUDPLister != nil
+}
+
 func GetPorts() *Ports {
 	ports := &Ports{}
 

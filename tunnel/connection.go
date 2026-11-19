@@ -165,7 +165,7 @@ func handleUDPToRemote(packet C.UDPPacket, pc C.PacketConn, addr *net.UDPAddr) e
 	return nil
 }
 
-func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSender, key string, oAddrPort netip.AddrPort) {
+func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSender, key string, oAddrPort, atomSource netip.AddrPort) {
 	defer func() {
 		sender.Close()
 		_ = pc.Close()
@@ -177,6 +177,7 @@ func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSen
 		_ = pc.SetReadDeadline(time.Now().Add(udpTimeout))
 		data, put, from, err := pc.WaitReadFrom()
 		if err != nil {
+			log.Debugln("[UDP] Outbound read stopped for %s: %s", key, err)
 			return
 		}
 
@@ -196,12 +197,16 @@ func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSen
 		fromAddr = sender.RestoreReadFrom(fromAddr).Unmap()
 
 		fromAddrPort = netip.AddrPortFrom(fromAddr, fromAddrPort.Port())
+		if atomSource.IsValid() {
+			fromAddrPort = atomSource
+		}
 
 		_, err = writeBack.WriteBack(data, net.UDPAddrFromAddrPort(fromAddrPort))
 		if put != nil {
 			put()
 		}
 		if err != nil {
+			log.Debugln("[UDP] Write back to client failed for %s: %s", key, err)
 			return
 		}
 	}

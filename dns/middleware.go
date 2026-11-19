@@ -162,7 +162,18 @@ func withFakeIP(skipper *fakeip.Skipper, fakePool *fakeip.Pool, fakePool6 *fakei
 				if fakePool == nil {
 					return handleMsgWithEmptyAnswer(r), nil
 				}
-				ip := fakePool.Lookup(host)
+				var binding *string
+				if fakePool.IsAtom() {
+					var err error
+					binding, err = atomBinding(r)
+					if err != nil {
+						return nil, err
+					}
+				}
+				ip, err := fakePool.LookupDNS(host, binding)
+				if err != nil {
+					return nil, err
+				}
 				rr = &D.A{
 					Hdr: D.RR_Header{Name: q.Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: dnsDefaultTTL},
 					A:   ip.AsSlice(),
@@ -184,6 +195,11 @@ func withFakeIP(skipper *fakeip.Skipper, fakePool *fakeip.Pool, fakePool6 *fakei
 
 			msg := r.Copy()
 			msg.Answer = []D.RR{rr}
+			if fakePool.IsAtom() {
+				if opt := msg.IsEdns0(); opt != nil {
+					opt.Option = filterAtomOption(opt.Option)
+				}
+			}
 
 			ctx.SetType(icontext.DNSTypeFakeIP)
 			setMsgTTL(msg, uint32(fakeIPTTL))

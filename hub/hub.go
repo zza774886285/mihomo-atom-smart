@@ -53,8 +53,14 @@ func WithSecret(secret string) Option {
 
 // ApplyConfig dispatch configure to all parts include ExternalController
 func ApplyConfig(cfg *config.Config) {
-	applyRoute(cfg)
+	if cfg.DNS.AtomFakeIPFinal == "" {
+		applyRoute(cfg)
+	}
 	executor.ApplyConfig(cfg, true)
+	if cfg.DNS.AtomFakeIPFinal != "" {
+		// A new Atom controller secret acknowledges that the executor finished.
+		applyRoute(cfg)
+	}
 }
 
 func applyRoute(cfg *config.Config) {

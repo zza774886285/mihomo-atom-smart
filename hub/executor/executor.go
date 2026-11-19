@@ -242,6 +242,7 @@ func updateNTP(c *config.NTP) {
 
 func updateDNS(c *config.DNS, generalIPv6 bool) {
 	if !c.Enable {
+		tunnel.ConfigureAtom(nil, "", "")
 		resolver.DefaultResolver = nil
 		resolver.DefaultHostMapper = nil
 		resolver.DefaultService = nil
@@ -285,6 +286,11 @@ func updateDNS(c *config.DNS, generalIPv6 bool) {
 	}
 
 	s := dns.NewService(r, m)
+	if c.AtomFakeIPFinal != "" {
+		tunnel.ConfigureAtom(c.FakeIPPool, c.AtomFakeIPFinal, c.AtomMixedDNS)
+	} else {
+		tunnel.ConfigureAtom(nil, "", "")
+	}
 
 	resolver.DefaultResolver = r
 	resolver.DefaultHostMapper = m

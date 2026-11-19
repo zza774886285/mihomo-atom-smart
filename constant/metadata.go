@@ -219,8 +219,10 @@ type Metadata struct {
 	ExitGeoIP      string     `json:"exitGeoIP"`      // ExitGeoIP is the region the node chosen by the smart group really lands in
 	ExitIPASN      string     `json:"exitIPASN"`      // ExitIPASN is the network the node chosen by the smart group runs on
 
-	RawSrcAddr net.Addr `json:"-"`
-	RawDstAddr net.Addr `json:"-"`
+	// AtomFakeIP tracks the original synthetic destination for proxy UDP.
+	AtomFakeIP netip.Addr `json:"-"`
+	RawSrcAddr net.Addr   `json:"-"`
+	RawDstAddr net.Addr   `json:"-"`
 	// Only domain rule
 	SniffHost string `json:"sniffHost"`
 }

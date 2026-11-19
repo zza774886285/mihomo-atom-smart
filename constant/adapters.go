@@ -310,11 +310,11 @@ func (s *packetAdapter) Key() string {
 }
 
 func NewPacketAdapter(packet UDPPacket, metadata *Metadata) PacketAdapter {
-	return &packetAdapter{
-		packet,
-		metadata,
-		packet.LocalAddr().String(),
-	}
+	return NewPacketAdapterWithKey(packet, metadata, packet.LocalAddr().String())
+}
+
+func NewPacketAdapterWithKey(packet UDPPacket, metadata *Metadata, key string) PacketAdapter {
+	return &packetAdapter{packet, metadata, key}
 }
 
 type WriteBack interface {

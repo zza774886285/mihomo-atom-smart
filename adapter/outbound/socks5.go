@@ -88,7 +88,16 @@ func (ss *Socks5) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Co
 
 // ListenPacketContext implements C.ProxyAdapter
 func (ss *Socks5) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (_ C.PacketConn, err error) {
-	if err = ss.ResolveUDP(ctx, metadata); err != nil {
+	var atomDomain socks5.Addr
+	var atomAddr *net.UDPAddr
+	if metadata.AtomFakeIP.IsValid() && metadata.Host != "" {
+		atomDomain = socks5.ParseAddr(metadata.RemoteAddress())
+		if atomDomain == nil {
+			return nil, errors.New("invalid Atom SOCKS5 UDP destination")
+		}
+		metadata.DstIP = metadata.AtomFakeIP
+		atomAddr = metadata.UDPAddr()
+	} else if err = ss.ResolveUDP(ctx, metadata); err != nil {
 		return nil, err
 	}
 	c, err := ss.dialer.DialContext(ctx, "tcp", ss.addr)
@@ -152,7 +161,7 @@ func (ss *Socks5) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 		pc.Close()
 	}()
 
-	return NewPacketConn(&socksPacketConn{PacketConn: pc, rAddr: bindUDPAddr, tcpConn: c}, ss), nil
+	return NewPacketConn(&socksPacketConn{PacketConn: pc, rAddr: bindUDPAddr, tcpConn: c, atomDomain: atomDomain, atomAddr: atomAddr}, ss), nil
 }
 
 // ProxyInfo implements C.ProxyAdapter
@@ -215,12 +224,18 @@ func NewSocks5(option Socks5Option) (*Socks5, error) {
 
 type socksPacketConn struct {
 	net.PacketConn
-	rAddr   net.Addr
-	tcpConn net.Conn
+	rAddr      net.Addr
+	tcpConn    net.Conn
+	atomDomain socks5.Addr
+	atomAddr   *net.UDPAddr
 }
 
 func (uc *socksPacketConn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
-	packet, err := socks5.EncodeUDPPacket(socks5.ParseAddrToSocksAddr(addr), b)
+	destination := uc.atomDomain
+	if destination == nil {
+		destination = socks5.ParseAddrToSocksAddr(addr)
+	}
+	packet, err := socks5.EncodeUDPPacket(destination, b)
 	if err != nil {
 		return
 	}
@@ -236,12 +251,15 @@ func (uc *socksPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	if e != nil {
 		return 0, nil, e
 	}
-	addr, payload, err := socks5.DecodeUDPPacket(b)
+	addr, payload, err := socks5.DecodeUDPPacket(b[:n])
 	if err != nil {
 		return 0, nil, err
 	}
 
-	udpAddr := addr.UDPAddr()
+	udpAddr := uc.atomAddr
+	if udpAddr == nil {
+		udpAddr = addr.UDPAddr()
+	}
 	if udpAddr == nil {
 		return 0, nil, errors.New("parse udp addr error")
 	}
