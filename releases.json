@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "tag_name": "atom-smart-20261120-312e010",
+    "version": "alpha-smart-atom.312e010",
+    "upstream_sha": "6a80483318c964efe400c92565038335c0c80e41",
+    "published_at": "2026-11-20T00:16:56Z",
+    "assets": [
+      {
+        "name": "mihomo-linux-amd64-v1.gz",
+        "browser_download_url": "https://github.com/zza774886285/mihomo-atom-smart/releases/download/atom-smart-20261120-312e010/mihomo-linux-amd64-v1.gz",
+        "digest": "sha256:6ca5ef7a00af3a6c1ab8a06b683814c08d9c8168eb3fb41bf895a75e6e1a41c6"
+      },
+      {
+        "name": "mihomo-linux-amd64-v3.gz",
+        "browser_download_url": "https://github.com/zza774886285/mihomo-atom-smart/releases/download/atom-smart-20261120-312e010/mihomo-linux-amd64-v3.gz",
+        "digest": "sha256:4d052824fe7708f1d52b4287d27a27e01d18c4f58546bfc0f8ce668fd9940e44"
+      },
+      {
+        "name": "atom-smart-manifest.json",
+        "browser_download_url": "https://github.com/zza774886285/mihomo-atom-smart/releases/download/atom-smart-20261120-312e010/atom-smart-manifest.json"
+      }
+    ]
+  }
+]
