@@ -72,3 +72,17 @@ func TestAtomFakeIPClearRetired(t *testing.T) {
 	_, err = store.Assign("b.invalid", first, last, &group)
 	require.NoError(t, err)
 }
+
+func TestAtomFakeIPWrapsAtTheTopOfTheAddressSpace(t *testing.T) {
+	C.SetHomeDir(t.TempDir())
+	store := AtomFakeIP{Prefix: netip.MustParsePrefix("255.255.255.252/30")}
+	first := netip.MustParseAddr("255.255.255.253")
+	last := netip.MustParseAddr("255.255.255.255")
+	var assigned []netip.Addr
+	for _, name := range []string{"a.invalid", "b.invalid", "c.invalid", "d.invalid"} {
+		ip, err := store.Assign(name, first, last, nil)
+		require.NoError(t, err)
+		assigned = append(assigned, ip)
+	}
+	require.Equal(t, []netip.Addr{first, first.Next(), last, first}, assigned)
+}

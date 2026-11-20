@@ -61,8 +61,8 @@ func (a AtomFakeIP) Assign(host string, first, last netip.Addr, binding *string)
 			cursor := []byte("cursor")
 			offset, ok := netip.AddrFromSlice(bucket.Get(cursor))
 			ip = first
-			if ok && !last.Less(offset.Next()) {
-				ip = offset.Next()
+			if next := offset.Next(); ok && next.IsValid() && !last.Less(next) {
+				ip = next
 			}
 			addressKey := []byte("i:" + ip.String())
 			if former := string(bucket.Get(addressKey)); former != "" {

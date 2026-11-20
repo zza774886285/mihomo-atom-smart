@@ -21,7 +21,7 @@ func cacheRouter() http.Handler {
 			render.JSON(w, r, newError(err.Error()))
 			return
 		}
-		render.NoContent(w)
+		render.NoContent(w, r)
 	})
 	r.Post("/dns/flush", flushDnsCache)
 	return r
