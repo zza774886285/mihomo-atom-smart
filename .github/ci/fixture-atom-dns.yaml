@@ -1,0 +1,49 @@
+mixed-port: 17890
+allow-lan: true
+bind-address: '*'
+mode: rule
+log-level: info
+ipv6: false
+redir-port: 17892
+tproxy-port: 17893
+external-controller: 127.0.0.1:19090
+secret: ci-fixture-only
+
+profile:
+  store-fake-ip: true
+  store-selected: true
+
+# atom 生成配置里独有的两个 DNS 字段（上游 mihomo 没有，只有 atom 的 fork 认）。
+# 校验点：这两个字段必须被解析成功，否则 atomdns 的 FakeIP 决策链路直接断。
+dns:
+  enable: true
+  atom-mixed-dns: 127.0.0.1:5353
+  atom-fake-ip-final: final
+  listen: 127.0.0.1:6677
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/15
+  fake-ip-range6: ''
+  fake-ip-filter: []
+  default-nameserver:
+    - 223.5.5.5
+  nameserver:
+    - 223.5.5.5
+  proxy-server-nameserver:
+    - 223.5.5.5
+  use-hosts: false
+  use-system-hosts: false
+
+proxies: []
+
+proxy-groups:
+  - name: final
+    type: select
+    proxies: [DIRECT]
+  - name: probe
+    type: url-test
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    proxies: [DIRECT]
+
+rules:
+  - MATCH,final

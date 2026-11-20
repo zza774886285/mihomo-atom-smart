@@ -1,0 +1,213 @@
+name: Atom Smart Sync
+
+# 上游 vernesong/mihomo 的 Alpha 一有更新就：合并 → 编 v1/v3 → 跑补丁门禁
+# → 通过就发 release 并更新 releases.json；任何一步失败只开/更新 issue，不发版。
+#
+# 幂等判据是 releases.json 里有没有这个上游 commit，不看版本号 ——
+# 否则「合并成功但构建失败」会让后面一直 skip。
+
+on:
+  schedule:
+    # 每 6 小时一次；上游 Alpha 更新频繁，但内核不需要跟得那么紧
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '同一上游 commit 也重新构建发版'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: atom-smart-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: atom-smart
+          fetch-depth: 0
+
+      - name: Detect upstream
+        id: detect
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          UP_SHA="$(git ls-remote https://github.com/vernesong/mihomo.git refs/heads/Alpha | cut -f1)"
+          [ -n "$UP_SHA" ] || { echo "取不到上游 Alpha HEAD" >&2; exit 1; }
+          echo "up_sha=$UP_SHA" >> "$GITHUB_OUTPUT"
+          echo "up_short=${UP_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+          PUBLISHED=no
+          if [ -f releases.json ] && jq -e --arg s "$UP_SHA" 'any(.[]; .upstream_sha == $s)' releases.json >/dev/null; then
+            PUBLISHED=yes
+          fi
+          echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISHED" = yes ] && [ "${FORCE:-}" != "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "上游 $UP_SHA 已发过版，跳过"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream Alpha
+        if: steps.detect.outputs.skip == 'false'
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "atom-smart-sync"
+          git config user.email "auto-sync@users.noreply.github.com"
+          git remote add upstream https://github.com/vernesong/mihomo.git
+          git fetch --no-tags upstream Alpha
+          UP="$(git rev-parse FETCH_HEAD)"
+          echo "up_sha=$UP" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$UP" HEAD; then
+            echo "merged=already" >> "$GITHUB_OUTPUT"
+          elif git merge --no-edit "$UP"; then
+            echo "merged=clean" >> "$GITHUB_OUTPUT"
+          else
+            CONFLICTS="$(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+            echo "::error::merge 冲突：${CONFLICTS}，需要人工 rebase"
+            git merge --abort || true
+            echo "merged=conflict" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.detect.outputs.skip == 'false'
+        with:
+          go-version: '1.27.x'
+          cache: true
+
+      - name: Resolve version
+        if: steps.detect.outputs.skip == 'false'
+        id: ver
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse --short=7 HEAD)"
+          echo "version=alpha-smart-atom.${SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag=atom-smart-$(date -u +%Y%m%d)-${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build v1 and v3
+        if: steps.detect.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          for T in v1 v3; do
+            GOAMD64="$T" CGO_ENABLED=0 go build -tags with_gvisor -trimpath \
+              -ldflags "-s -w -buildid= -X 'github.com/metacubex/mihomo/constant.Version=${VERSION}' -X 'github.com/metacubex/mihomo/constant.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)'" \
+              -o "mihomo-${T}" .
+            gzip -9 -c "mihomo-${T}" > "mihomo-linux-amd64-${T}.gz"
+            sha256sum "mihomo-linux-amd64-${T}.gz" > "mihomo-linux-amd64-${T}.gz.sha256"
+          done
+          ls -lh mihomo-linux-amd64-*.gz
+
+      # 门禁：真二进制跑起来验，不只 -t
+      - name: Patch gate (atom FakeIP + smart)
+        if: steps.detect.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          gunzip -c mihomo-linux-amd64-v1.gz > mihomo.bin
+          chmod +x mihomo.bin
+          bash .github/ci/verify.sh ./mihomo.bin "${{ steps.ver.outputs.version }}"
+
+      - name: Assemble the release assets
+        if: steps.detect.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          UP_SHA: ${{ steps.merge.outputs.up_sha }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp mihomo-linux-amd64-v1.gz mihomo-linux-amd64-v3.gz out/
+          cd out
+          sha() { sha256sum "$1" | awk '{print $1}'; }
+          V1="$(sha mihomo-linux-amd64-v1.gz)"
+          V3="$(sha mihomo-linux-amd64-v3.gz)"
+          jq -n --arg v "$VERSION" --arg tag "$TAG" --arg up "$UP_SHA" --arg v1 "$V1" --arg v3 "$V3" \
+            '{format: 1, channel: "atom-smart", version: $v, tag: $tag, upstream_sha: $up,
+              artifacts: {
+                "mihomo-linux-amd64-v1.gz": {sha256: $v1, goamd64: "v1", note: "无 AVX 的 CPU（CHR / QEMU 默认）"},
+                "mihomo-linux-amd64-v3.gz": {sha256: $v3, goamd64: "v3", note: "支持 AVX2 的 CPU"}
+              }}' > atom-smart-manifest.json
+          jq . atom-smart-manifest.json
+
+      - name: Publish the GitHub release
+        if: steps.detect.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.version }}
+          files: |
+            out/mihomo-linux-amd64-v1.gz
+            out/mihomo-linux-amd64-v3.gz
+            out/atom-smart-manifest.json
+          body: |
+            mihomo **smart** 内核 + atom FakeIP 出站补丁，自报版本 `${{ steps.ver.outputs.version }}`。
+
+            上游 vernesong/mihomo Alpha `${{ steps.merge.outputs.up_sha }}`，已合并 atom 的 3 个 FakeIP 补丁。
+
+            门禁已通过（真二进制）：
+            - atom 私有 DNS 字段（`atom-mixed-dns` / `atom-fake-ip-final`）被接受，缺 `atom-mixed-dns` 时必须失败
+            - `type: smart` 组校验通过
+            - 运行时 Clash API 里出现 `Smart` 类型的组
+
+            - `mihomo-linux-amd64-v1.gz`：GOAMD64=v1，给无 AVX 的机器（142 / CHR / 默认 QEMU CPU）
+            - `mihomo-linux-amd64-v3.gz`：GOAMD64=v3，给支持 AVX2 的机器
+            - smart 组首次启用会自己下 `Model.bin`（9MB）和 `ASN.mmdb`（8.7MB），国内需要预置
+
+      - name: Update releases.json
+        if: steps.detect.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          UP_SHA: ${{ steps.merge.outputs.up_sha }}
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/${{ github.repository }}/releases/download/${TAG}"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          V1="$(jq -r '.artifacts["mihomo-linux-amd64-v1.gz"].sha256' out/atom-smart-manifest.json)"
+          V3="$(jq -r '.artifacts["mihomo-linux-amd64-v3.gz"].sha256' out/atom-smart-manifest.json)"
+          entry="$(jq -n --arg tag "$TAG" --arg v "$VERSION" --arg up "$UP_SHA" --arg base "$BASE" --arg now "$NOW" --arg v1 "$V1" --arg v3 "$V3" '{
+            tag_name: $tag, version: $v, upstream_sha: $up, published_at: $now,
+            assets: [
+              {name: "mihomo-linux-amd64-v1.gz", browser_download_url: ($base + "/mihomo-linux-amd64-v1.gz"), digest: ("sha256:" + $v1)},
+              {name: "mihomo-linux-amd64-v3.gz", browser_download_url: ($base + "/mihomo-linux-amd64-v3.gz"), digest: ("sha256:" + $v3)},
+              {name: "atom-smart-manifest.json", browser_download_url: ($base + "/atom-smart-manifest.json")}
+            ]}')"
+          if [ -f releases.json ]; then base_json="$(cat releases.json)"; else base_json='[]'; fi
+          jq --argjson e "$entry" '([$e] + map(select(.tag_name != $e.tag_name))) | sort_by(.published_at) | reverse | .[0:20]' \
+            <<<"$base_json" > releases.json
+          jq -r '.[0] | .tag_name + "  " + .version' releases.json
+
+      - name: Push branch and release index
+        if: steps.detect.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          git config user.name "atom-smart-sync"
+          git config user.email "auto-sync@users.noreply.github.com"
+          git add releases.json
+          git diff --cached --quiet || git commit -m "release: ${{ steps.ver.outputs.tag }} in releases.json (auto sync)"
+          git push origin HEAD:atom-smart
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UP: ${{ steps.detect.outputs.up_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="上游自动同步失败：需要人工处理"
+          BODY="$(printf '自动同步上游 `%s` 时失败，**没有发版**。\n\n运行记录：%s\n\n常见原因：\n- merge 冲突（上游改了 atom 补丁碰过的文件：`dns/server.go`、`tunnel/tunnel.go`、`hub/route/cache.go`、`constant/metadata.go`）\n- 门禁失败（atom 私有字段或 smart 组被上游改动破坏）\n- Go 版本不兼容\n\n处理方式：本地 `git fetch upstream Alpha` 后 rebase 到 atom-smart，解冲突、跑 `bash .github/ci/verify.sh ./mihomo`，再手动跑一次本 workflow。\n' "${UP:-未知}" "$RUN_URL")"
+          NUM="$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$NUM" ]; then gh issue comment "$NUM" --body "$BODY"; else gh issue create --title "$TITLE" --body "$BODY"; fi

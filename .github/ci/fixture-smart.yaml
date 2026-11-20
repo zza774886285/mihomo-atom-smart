@@ -1,0 +1,29 @@
+mixed-port: 17891
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+
+proxies: []
+
+# smart 组是 vernesong 分支独有的策略组类型。
+# uselightgbm / prefer-asn 关掉，避免 CI 里依赖 GitHub 下载 Model.bin、ASN.mmdb
+# （那两个文件的下拉单独由 verify.sh 的可选步骤覆盖）。
+proxy-groups:
+  - name: 香港智能
+    type: smart
+    url: https://www.gstatic.com/generate_204
+    interval: 200
+    lazy: false
+    uselightgbm: false
+    collectdata: false
+    sample-rate: 0.1
+    prefer-asn: false
+    policy-priority: '优:3;备:0.3'
+    proxies: [DIRECT]
+  - name: final
+    type: select
+    proxies: [香港智能, DIRECT]
+
+rules:
+  - MATCH,final

@@ -1,0 +1,75 @@
+name: Atom Smart Build
+
+# 推 atom-smart 分支就编一遍并跑补丁门禁，防「改了源码没跑」。
+# 不发版；发版由 Atom Smart Sync 负责。
+
+on:
+  push:
+    branches: [atom-smart]
+    paths-ignore: [releases.json]
+  pull_request:
+    branches: [atom-smart]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atom-smart-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - { goamd64: v1, suffix: v1 }
+          - { goamd64: v3, suffix: v3 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse --short=7 HEAD)"
+          echo "version=alpha-smart-atom.${SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          GOAMD64: ${{ matrix.goamd64 }}
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          go build -tags with_gvisor -trimpath \
+            -ldflags "-s -w -buildid= -X 'github.com/metacubex/mihomo/constant.Version=${{ steps.ver.outputs.version }}' -X 'github.com/metacubex/mihomo/constant.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)'" \
+            -o mihomo .
+          chmod +x mihomo
+          gzip -9 -c mihomo > "mihomo-linux-amd64-${{ matrix.suffix }}.gz"
+          sha256sum "mihomo-linux-amd64-${{ matrix.suffix }}.gz" > "mihomo-linux-amd64-${{ matrix.suffix }}.gz.sha256"
+
+      # 两个变体源码一致，门禁只跑一遍省时间
+      - name: Patch gate (atom FakeIP + smart)
+        if: matrix.suffix == 'v1'
+        run: |
+          set -euo pipefail
+          gunzip -c "mihomo-linux-amd64-${{ matrix.suffix }}.gz" > mihomo.bin
+          chmod +x mihomo.bin
+          bash .github/ci/verify.sh ./mihomo.bin "${{ steps.ver.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mihomo-linux-amd64-${{ matrix.suffix }}-${{ steps.ver.outputs.sha }}
+          path: |
+            mihomo-linux-amd64-${{ matrix.suffix }}.gz
+            mihomo-linux-amd64-${{ matrix.suffix }}.gz.sha256
+          retention-days: 14
